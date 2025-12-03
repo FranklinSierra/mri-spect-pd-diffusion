@@ -13,6 +13,7 @@ from dataset import *
 import copy
 import config
 import csv
+import os
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -58,28 +59,83 @@ class Diffusion:
 
 # First stage
 def train_AAE():
+    # Ensure result directory exists to avoid FileNotFoundError on fresh runs.
+    os.makedirs(os.path.join("result", str(config.exp)), exist_ok=True)
+    seed_torch(config.seed)
     model = AAE().to(config.device)
     opt_model = optim.Adam(model.parameters(),lr=config.learning_rate,betas=(0.5, 0.999)) 
     disc = Discriminator().to(config.device)
     opt_disc = optim.Adam(disc.parameters(),lr=config.learning_rate,betas=(0.5, 0.999))
 
+    start_epoch = 0
     average = 0
+    patience = 0
+    # Resume if checkpoint exists.
+    if os.path.exists(config.CHECKPOINT_AAE):
+        ckpt = load_checkpoint(config.CHECKPOINT_AAE, model, opt_model, config.learning_rate)
+        # If old checkpoints lack metadata, infer epoch/best metric from logs.
+        start_epoch = ckpt.get("epoch")
+        if start_epoch is None:
+            loss_log = os.path.join("result", str(config.exp), "loss_curve.csv")
+            if os.path.exists(loss_log):
+                try:
+                    with open(loss_log, newline="") as f:
+                        reader = csv.reader(f)
+                        next(reader, None)  # skip header
+                        for row in reader:
+                            if row and row[0].strip().isdigit():
+                                start_epoch = int(row[0])
+                except Exception:
+                    start_epoch = 0
+            if start_epoch is None:
+                start_epoch = 0
 
-    for epoch in range(config.epochs):
+        average = ckpt.get("average")
+        if average is None:
+            val_log = os.path.join("result", str(config.exp), "validation.csv")
+            if os.path.exists(val_log):
+                try:
+                    with open(val_log, newline="") as f:
+                        reader = csv.reader(f)
+                        next(reader, None)
+                        average = 0
+                        for row in reader:
+                            if len(row) >= 3:
+                                try:
+                                    psnr_val = float(row[1])
+                                    ssim_val = float(row[2])
+                                    average = max(average, psnr_val + ssim_val * 10)
+                                except ValueError:
+                                    continue
+                except Exception:
+                    average = 0
+        if average is None:
+            average = 0
+        patience = ckpt.get("patience", 0)
+
+    # Allow manual override if checkpoint lacks metadata and logs were wiped.
+    if config.resume_epoch is not None:
+        start_epoch = config.resume_epoch
+    if config.resume_average is not None:
+        average = config.resume_average
+
+        print(f"=> Resuming AAE from epoch {start_epoch}, best metric {average}")
+
+    for epoch in range(start_epoch, config.epochs):
         print("epoch:", epoch)
         lossfile = open("result/"+str(config.exp)+"loss_curve.csv", 'a+',newline = '')
         writer = csv.writer(lossfile)
         if epoch == 0:
             writer.writerow(["Epoch","recon_loss","disc_loss_epoch"])
         
-        dataset = OneDataset(root_Abeta=config.whole_Abeta, task = config.train, name = "train")
+        dataset = OneDataset(root_Abeta=config.whole_Abeta, task = config.train, stage = "train")
         loader = DataLoader(dataset,batch_size=config.batch_size,shuffle=True,num_workers=config.numworker,pin_memory=True,drop_last=True)
         loop = tqdm(loader, leave=True)
         length = dataset.length_dataset
         recon_loss_epoch=0
         disc_loss_epoch=0
 
-        for idx, (Abeta, name) in enumerate(loop):
+        for idx, (Abeta, stage) in enumerate(loop):
             Abeta = np.expand_dims(Abeta, axis=1)
             Abeta = torch.tensor(Abeta)
             Abeta = Abeta.to(config.device)
@@ -112,7 +168,7 @@ def train_AAE():
         lossfile.close()
 
         #validation part
-        dataset = OneDataset(root_Abeta=config.whole_Abeta, task=config.validation, name= "validation")
+        dataset = OneDataset(root_Abeta=config.whole_Abeta, task=config.validation, stage= "validation")
         loader = DataLoader(dataset,batch_size= 1,shuffle=False,num_workers=config.numworker,pin_memory=True,drop_last=True)
         loop = tqdm(loader, leave=True)
         length = dataset.length_dataset
@@ -124,7 +180,7 @@ def train_AAE():
         if epoch == 0:
             writer.writerow(['Epoch','PSNR','SSIM'])
 
-        for idx, (Abeta, name) in enumerate(loop):
+        for idx, (Abeta, stage) in enumerate(loop):
             Abeta = np.expand_dims(Abeta, axis=1)
             Abeta = torch.tensor(Abeta)
             Abeta = Abeta.to(config.device)
@@ -138,9 +194,10 @@ def train_AAE():
             Abeta = Abeta.detach().cpu().numpy()
             Abeta = np.squeeze(Abeta)
             Abeta = Abeta.astype(np.float32)
+            data_range = max(Abeta.max() - Abeta.min(), 1e-8)
         
-            psnr_0 += round(psnr(Abeta,decoded_Abeta),3)
-            ssim_0 += round(ssim(Abeta,decoded_Abeta),3)
+            psnr_0 += round(psnr(Abeta,decoded_Abeta, data_range=data_range),3)
+            ssim_0 += round(ssim(Abeta, decoded_Abeta, data_range=data_range), 3)
         
         average_epoch = psnr_0/length + ssim_0 * 10/length
         writer.writerow([epoch+1, psnr_0/length, ssim_0/length])
@@ -149,9 +206,11 @@ def train_AAE():
         # test part
         if average_epoch > average:
             average = average_epoch
-            save_checkpoint(model, opt_model, filename=config.CHECKPOINT_AAE)
+            patience = 0
+            # Save epoch/average to make resuming possible.
+            save_checkpoint(model, opt_model, filestage=config.CHECKPOINT_AAE, epoch=epoch+1, average=average, patience=patience)
 
-            dataset = OneDataset(root_Abeta=config.whole_Abeta, task=config.test, name= "test")
+            dataset = OneDataset(root_Abeta=config.whole_Abeta, task=config.test, stage= "test")
             loader = DataLoader(dataset,batch_size= 1,shuffle=False,num_workers=config.numworker,pin_memory=True,drop_last=True)
             loop = tqdm(loader, leave=True)
             length = dataset.length_dataset
@@ -163,7 +222,7 @@ def train_AAE():
             if epoch == 0:
                 writer.writerow(['Epoch','PSNR','SSIM'])
 
-            for idx, (Abeta, name) in enumerate(loop):
+            for idx, (Abeta, stage) in enumerate(loop):
                 Abeta = np.expand_dims(Abeta, axis=1)
                 Abeta = torch.tensor(Abeta)
                 Abeta = Abeta.to(config.device)
@@ -177,24 +236,39 @@ def train_AAE():
                 Abeta = Abeta.detach().cpu().numpy()
                 Abeta = np.squeeze(Abeta)
                 Abeta = Abeta.astype(np.float32)
+                data_range = max(Abeta.max() - Abeta.min(), 1e-8)
             
-                psnr_0 += round(psnr(Abeta,decoded_Abeta),3)
-                ssim_0 += round(ssim(Abeta,decoded_Abeta),3)
+                psnr_0 += round(psnr(Abeta,decoded_Abeta, data_range=data_range),3)
+                ssim_0 += round(ssim(Abeta, decoded_Abeta, data_range=data_range), 3)
 
             writer.writerow([epoch+1, psnr_0/length, ssim_0/length])
             csvfile.close()
+        else:
+            patience += 1
+            if patience >= 15:
+                print(f"Early stopping AAE (patience=15) at epoch {epoch+1}, best metric {average}")
+                break
 
 def encoding():
+    seed_torch(config.seed)
     model = AAE().to(config.device)
     opt_model = optim.Adam(model.parameters(), lr=config.learning_rate,betas=(0.5, 0.9))
     load_checkpoint(config.CHECKPOINT_AAE, model, opt_model, config.learning_rate)
+    print("checkpoint loaded! from: ", config.CHECKPOINT_AAE)
     image = nib.load(config.path)
+    #print("image loaded!", image.shape)
 
-    dataset = OneDataset(root_Abeta=config.whole_Abeta, task = config.train, name= "Non")
+    dataset = OneDataset(root_Abeta=config.whole_Abeta, task = config.train, stage= "Non")
+    #print("OneDataset created!")
     loader = DataLoader(dataset,batch_size=1,shuffle=True,num_workers=config.numworker,pin_memory=True)
+    #print("DataLoader created!")
     loop = tqdm(loader, leave=True)
+    #print("TQDM loop created!", loop)
 
-    for idx, (Abeta,name) in enumerate(loop):
+    for idx, (Abeta,stage) in enumerate(loop):
+        #print("idx:", idx)
+        #print("Abeta shape:", Abeta.shape)
+        #print("Stage:", stage)
         Abeta = np.expand_dims(Abeta, axis=1)
         Abeta = torch.tensor(Abeta)
         Abeta = Abeta.to(config.device)
@@ -205,11 +279,13 @@ def encoding():
         latent_Abeta = latent_Abeta.astype(np.float32)
 
         latent_Abeta = nib.Nifti1Image(latent_Abeta, image.affine)
-        nib.save(latent_Abeta, config.latent_Abeta+str(name[0]))
+        nib.save(latent_Abeta, config.latent_Abeta+str(stage[0]))
 
 # Second stage
 def train_LDM():
+    seed_torch(config.seed)
     gpus = config.gpus
+    os.makedirs(os.path.join("result", str(config.exp)), exist_ok=True)
     model = AAE().to(config.device)
     opt_model = optim.Adam(model.parameters(),lr=config.learning_rate,betas=(0.5, 0.9))
     load_checkpoint(config.CHECKPOINT_AAE, model, opt_model, config.learning_rate)
@@ -222,9 +298,41 @@ def train_LDM():
 
     L2 = nn.MSELoss()
     diffusion = Diffusion()
+    start_epoch = 0
     average = 0
+    best_ssim = -1e9
+    patience = 0
+    # Resume if checkpoint exists.
+    if os.path.exists(config.CHECKPOINT_Unet):
+        ckpt = load_checkpoint(config.CHECKPOINT_Unet, ema_Unet, opt_Unet, config.learning_rate)
+        # Load Unet weights if stored separately; otherwise fall back to EMA weights.
+        if "unet_state_dict" in ckpt:
+            Unet.load_state_dict(ckpt["unet_state_dict"])
+        else:
+            Unet.load_state_dict(ckpt["state_dict"])
+        start_epoch = ckpt.get("epoch", 0)
+        average = ckpt.get("average", 0)
+        best_ssim = ckpt.get("best_ssim", best_ssim)
+        patience = ckpt.get("patience", patience)
+    # Allow manual overrides if checkpoint lacks metadata.
+    if config.resume_epoch_unet is not None:
+        start_epoch = config.resume_epoch_unet
+    if config.resume_average_unet is not None:
+        average = config.resume_average_unet
+    if start_epoch or average:
+        print(f"=> Resuming Unet from epoch {start_epoch}, best metric {average}")
 
-    for epoch in range(config.epochs):
+    def safe_ssim(gt, pred, data_range):
+        # Adapt window size to the smallest spatial dim; if too small, return 0.
+        min_side = min(gt.shape)
+        win_size = 7
+        if min_side < win_size:
+            win_size = min_side if (min_side % 2 == 1) else max(min_side - 1, 1)
+        if win_size < 3 or min_side < 2:
+            return 0.0
+        return ssim(gt, pred, data_range=data_range, win_size=win_size)
+
+    for epoch in range(start_epoch, config.epochs):
         lossfile = open("result/"+str(config.exp)+"loss_curve.csv", 'a+',newline = '')
         writer = csv.writer(lossfile)
         if epoch == 0:
@@ -237,7 +345,7 @@ def train_LDM():
 
         MSE_loss_epoch = 0
 
-        for idx, (MRI, latent_Abeta, name, label) in enumerate(loop):
+        for idx, (MRI, latent_Abeta, stage, label) in enumerate(loop):
             label = label.to(config.device)
             MRI = np.expand_dims(MRI, axis=1)
             MRI = torch.tensor(MRI)
@@ -274,7 +382,7 @@ def train_LDM():
         if epoch == 0:
             writer.writerow(['Epoch','PSNR','SSIM'])
 
-        for idx, (MRI, Abeta, name, label) in enumerate(loop):
+        for idx, (MRI, Abeta, stage, label) in enumerate(loop):
             MRI = np.expand_dims(MRI, axis=1)
             MRI = torch.tensor(MRI)
             MRI = MRI.to(config.device)
@@ -286,20 +394,43 @@ def train_LDM():
             syn_Abeta = np.squeeze(syn_Abeta)
             syn_Abeta = syn_Abeta.astype(np.float32)
 
+            # DataLoader convierte los numpy en torch; pasa a numpy antes de métricas.
+            Abeta = Abeta.detach().cpu().numpy()
             Abeta = np.squeeze(Abeta)
             Abeta = Abeta.astype(np.float32)
+            data_range = max(Abeta.max() - Abeta.min(), 1e-8)
 
-            psnr_0 += round(psnr(Abeta,syn_Abeta),3)
-            ssim_0 += round(ssim(Abeta,syn_Abeta),3)
+            psnr_0 += round(psnr(Abeta,syn_Abeta, data_range=data_range),3)
+            ssim_0 += round(safe_ssim(Abeta, syn_Abeta, data_range=data_range), 3)
         
-        average_epoch = psnr_0/length + ssim_0 * 10/length
-        writer.writerow([epoch+1, psnr_0/length, ssim_0/length])
+        psnr_avg = psnr_0/length
+        ssim_avg = ssim_0/length
+        average_epoch = psnr_avg + ssim_avg * 10
+        writer.writerow([epoch+1, psnr_avg, ssim_avg])
         csvfile.close()
+        # Early stopping on validation SSIM with patience.
+        if ssim_avg > best_ssim:
+            best_ssim = ssim_avg
+            patience = 0
+        else:
+            patience += 1
+        if patience >= 15:
+            print(f"Early stopping (patience=15) at epoch {epoch+1}, best SSIM {best_ssim}")
+            break
         
         # test part
         if average_epoch > average:
             average = average_epoch
-            save_checkpoint(ema_Unet, opt_Unet, filename=config.CHECKPOINT_Unet)
+            save_checkpoint(
+                ema_Unet,
+                opt_Unet,
+                filestage=config.CHECKPOINT_Unet,
+                epoch=epoch+1,
+                average=average,
+                unet_state_dict=Unet.state_dict(),
+                best_ssim=best_ssim,
+                patience=patience,
+            )
 
             dataset = TwoDataset(root_MRI=config.whole_MRI, root_Abeta=config.whole_Abeta, task = config.test, stage = "test")
             loader = DataLoader(dataset,batch_size=config.batch_size,shuffle=True,num_workers=config.numworker,pin_memory=True)
@@ -313,7 +444,7 @@ def train_LDM():
             if epoch == 0:
                 writer.writerow(['Epoch','PSNR','SSIM'])
 
-            for idx, (MRI, Abeta, name, label) in enumerate(loop):
+            for idx, (MRI, Abeta, stage, label) in enumerate(loop):
                 MRI = np.expand_dims(MRI, axis=1)
                 MRI = torch.tensor(MRI)
                 MRI = MRI.to(config.device)
@@ -325,17 +456,20 @@ def train_LDM():
                 syn_Abeta = np.squeeze(syn_Abeta)
                 syn_Abeta = syn_Abeta.astype(np.float32)
 
+                Abeta = Abeta.detach().cpu().numpy()
                 Abeta = np.squeeze(Abeta)
                 Abeta = Abeta.astype(np.float32)
+                data_range = max(Abeta.max() - Abeta.min(), 1e-8)
 
-                psnr_0 += round(psnr(Abeta,syn_Abeta),3)
-                ssim_0 += round(ssim(Abeta,syn_Abeta),3)
+                psnr_0 += round(psnr(Abeta,syn_Abeta, data_range=data_range),3)
+                ssim_0 += round(safe_ssim(Abeta, syn_Abeta, data_range=data_range), 3)
 
             writer.writerow([epoch+1, psnr_0/length, ssim_0/length])
             csvfile.close()
 
 if __name__ == '__main__':
-    seed_torch()
+    print("device:", config.device)
+    seed_torch(config.seed)
     train_AAE()
     encoding()
     train_LDM()

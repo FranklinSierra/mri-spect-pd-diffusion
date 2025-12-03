@@ -1,0 +1,16 @@
+# Big data
+data/
+*.nii
+*.nii.gz
+
+# Models checkpoints
+result/
+exp_1/
+*.tar
+exp_image_diffusion/
+*.pth
+
+# Python stuff
+__pycache__/
+*.pyc
+

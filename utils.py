@@ -13,12 +13,19 @@ def weights_init(m):
         nn.init.normal_(m.weight.data, 1.0, 0.02)
         nn.init.constant_(m.bias.data, 0)
 
-def save_checkpoint(model, optimizer, filename="my_checkpoint.pth.tar"):
+def save_checkpoint(model, optimizer, filename="my_checkpoint.pth.tar", filestage=None, **extra):
+    # Keep backward compatibility with the older API that passed `filestage`.
+    if filestage is not None:
+        filename = filestage
     print("=> Saving checkpoint")
     checkpoint = {
         "state_dict": model.state_dict(),
         "optimizer": optimizer.state_dict(),
     }
+    # Store any extra metadata (e.g., epoch, best metric) when provided.
+    for key, value in extra.items():
+        if value is not None:
+            checkpoint[key] = value
     torch.save(checkpoint, filename)
 
 def load_checkpoint(checkpoint_file, model, optimizer, lr):
@@ -29,6 +36,8 @@ def load_checkpoint(checkpoint_file, model, optimizer, lr):
     
     for param_group in optimizer.param_groups:
         param_group["lr"] = lr
+    # Return checkpoint to allow callers to recover metadata when present.
+    return checkpoint
 
 def seed_torch(seed=0):
     random.seed(seed)

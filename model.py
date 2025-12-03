@@ -334,19 +334,9 @@ class UNet(nn.Module):
         self.label_emb = nn.Embedding(config.num_classes, time_dim)
     
     def forward(self, x, y, time, label=None):
+        # Image conditioning
         cond = self.cond(y)
-        x =torch.cat([x,cond],dim=1)
-        t = self.time_mlp(time)
-
-        if label is not None:
-            label = label.squeeze()
-            label = label.long()
-            k = self.label_emb(label)
-            t =  t + k
-
-    def forward(self, x, y, time, label=None):
-        cond = self.condition(y)
-        x = torch.cat([x,cond],dim=1)
+        x = torch.cat([x, cond], dim=1)
         feats = []
 
         t = self.time_mlp(time) if exists(self.time_mlp) else None

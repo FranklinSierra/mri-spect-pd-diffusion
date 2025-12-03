@@ -3,19 +3,20 @@ import torch
 device = "cuda" if torch.cuda.is_available() else "cpu"
 noiseSteps = 1000
 latent_dim = 1
-learning_rate = 1e-4
+learning_rate = 2e-4
 batch_size = 2
 numworker = 0
 epochs = 1000
 time_dim = 128
 num_classes = 2
 Lambda = 100
+seed = 42
 
 exp = "exp_1/"
-whole_Abeta = "./data/whole_Abeta"
-latent_Abeta = "./data/latent_Abeta/"
+whole_Abeta = "./data/whole_SPECT"
+latent_Abeta = "./data/latent_SPECT/"
 whole_MRI = "./data/whole_MRI"
-path = "./data/whole_MRI/037S6046.nii"
+path = "/workspace/projects/T1-SPECT-translation/IL-CLDM/data/whole_MRI/3102.nii"
 gpus = [0]
 
 CHECKPOINT_AAE = "result/"+exp+"AAE.pth.tar"
@@ -24,3 +25,9 @@ CHECKPOINT_Unet = "result/"+exp+"Unet.pth.tar"
 train = "data_info/train.txt"
 validation = "data_info/validation.txt"
 test = "data_info/test.txt"
+
+# Optional manual resume hints (used if checkpoints lack metadata).
+resume_epoch = None  # e.g., 787
+resume_average = None  # e.g., best psnr+ssim*10 metric when known
+resume_epoch_unet = None
+resume_average_unet = None
