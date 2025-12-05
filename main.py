@@ -43,7 +43,7 @@ class Diffusion:
     def sample(self, model, y):
         with torch.no_grad():
             n = y.shape[0]
-            x = torch.randn((n, 1, 40, 48, 40)).to(config.device)
+            x = torch.randn((n, 1, *config.latent_shape)).to(config.device)
             for i in tqdm(reversed(range(1, self.noise_steps)), position=0):
                 t = (torch.ones(n) * i).long().to(config.device)
                 predicted_noise = model(x, y, t)
@@ -290,7 +290,7 @@ def train_LDM():
     opt_model = optim.Adam(model.parameters(),lr=config.learning_rate,betas=(0.5, 0.9))
     load_checkpoint(config.CHECKPOINT_AAE, model, opt_model, config.learning_rate)
 
-    Unet = UNet().to(config.device)
+    Unet = UNet(in_channel=2, out_channel=1, image_size=config.latent_shape[0]).to(config.device)
     opt_Unet= optim.AdamW(Unet.parameters(), lr=config.learning_rate)
     Unet = nn.DataParallel(Unet,device_ids=gpus,output_device=gpus[0])
     ema = EMA(0.9999)

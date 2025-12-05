@@ -22,6 +22,12 @@ gpus = [0]
 CHECKPOINT_AAE = "result/"+exp+"AAE.pth.tar"
 CHECKPOINT_Unet = "result/"+exp+"Unet.pth.tar"
 
+# Spatial settings
+# Crop size applied to MRI/SPECT before AAE and to MRI in LDM. Latent dims are crop_size/4.
+# Choose a cubic size divisible by 8 to avoid odd shapes in UNet down/upsampling.
+crop_size = (64, 64, 64)
+latent_shape = (crop_size[0] // 4, crop_size[1] // 4, crop_size[2] // 4)
+
 train = "data_info/train.txt"
 validation = "data_info/validation.txt"
 test = "data_info/test.txt"

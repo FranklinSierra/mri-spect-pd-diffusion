@@ -34,14 +34,26 @@ def resolve_nifti(root, basename):
         return path_niigz
     raise FileNotFoundError(f"NIfTI not found: {basename} (.nii or .nii.gz) under {root}")
 
-def random_translation(data1):
-    i=np.random.randint(-2,3)
-    j=np.random.randint(-2,3)
-    z=np.random.randint(-2,3)
-    return data1[10+i:170+i,18+j:210+j,10+z:170+z]
+def center_crop(data, size):
+    """Center crop to `size` (D,H,W)."""
+    d, h, w = data.shape
+    cd, ch, cw = size
+    sd = max((d - cd) // 2, 0)
+    sh = max((h - ch) // 2, 0)
+    sw = max((w - cw) // 2, 0)
+    return data[sd:sd+cd, sh:sh+ch, sw:sw+cw]
 
-def crop(data1):
-    return data1[10:170,18:210,10:170]
+def random_crop(data, size):
+    """Random crop within bounds to size (D,H,W)."""
+    d, h, w = data.shape
+    cd, ch, cw = size
+    md = max(d - cd, 0)
+    mh = max(h - ch, 0)
+    mw = max(w - cw, 0)
+    sd = np.random.randint(0, md + 1) if md > 0 else 0
+    sh = np.random.randint(0, mh + 1) if mh > 0 else 0
+    sw = np.random.randint(0, mw + 1) if mw > 0 else 0
+    return data[sd:sd+cd, sh:sh+ch, sw:sw+cw]
 
 def min_max_norm(vol):
     vmin = vol.min()
@@ -74,10 +86,8 @@ class OneDataset(Dataset):
         basename = self.images[index % self.len]
         path_Abeta = resolve_nifti(self.root_Abeta, basename)
         Abeta = nifti_to_numpy(path_Abeta)
-        if self.stage == "train":
-            Abeta = random_translation(Abeta)
-        else:
-            Abeta = crop(Abeta)
+        # Use center crop for all splits for stability.
+        Abeta = center_crop(Abeta, config.crop_size)
         Abeta = min_max_norm(Abeta)
         #print("min and max of Abeta:", Abeta.min(), Abeta.max())
         return Abeta, basename + ".nii"
@@ -103,11 +113,12 @@ class TwoDataset(Dataset):
         Abeta = nifti_to_numpy(path_Abeta)
         path_MRI = resolve_nifti(self.root_MRI, basename)
         MRI = nifti_to_numpy(path_MRI)
-        MRI = crop(MRI)
+        MRI = center_crop(MRI, config.crop_size)
         MRI = z_score_norm(MRI)
         #print("min and max of MRI:", MRI.min(), MRI.max())
-        if self.stage != "train":
-            Abeta = crop(Abeta)
+        # Always center crop Abeta for consistency across splits
+        if Abeta.shape != config.crop_size:
+            Abeta = center_crop(Abeta, config.crop_size)
         Abeta = min_max_norm(Abeta)
         #print("min and max of Abeta:", Abeta.min(), Abeta.max())
         data = pd.read_csv("data_info/data_info.csv",encoding = "ISO-8859-1")
