@@ -2,6 +2,7 @@ from torch.utils.data import Dataset
 import nibabel as nib
 import pandas as pd
 import numpy as np
+import scipy.ndimage
 import config
 import os
 
@@ -55,6 +56,13 @@ def random_crop(data, size):
     sw = np.random.randint(0, mw + 1) if mw > 0 else 0
     return data[sd:sd+cd, sh:sh+ch, sw:sw+cw]
 
+def resample_to_shape(vol, target_shape):
+    """Resample 3D volume to target_shape using trilinear interpolation."""
+    if vol.shape == target_shape:
+        return vol
+    zoom_factors = [t / float(s) for t, s in zip(target_shape, vol.shape)]
+    return scipy.ndimage.zoom(vol, zoom=zoom_factors, order=1)
+
 def min_max_norm(vol):
     vmin = vol.min()
     vmax = vol.max()
@@ -86,6 +94,8 @@ class OneDataset(Dataset):
         basename = self.images[index % self.len]
         path_Abeta = resolve_nifti(self.root_Abeta, basename)
         Abeta = nifti_to_numpy(path_Abeta)
+        # Resample SPECT to target shape before cropping.
+        Abeta = resample_to_shape(Abeta, config.target_shape)
         # Use center crop for all splits for stability.
         Abeta = center_crop(Abeta, config.crop_size)
         Abeta = min_max_norm(Abeta)
@@ -102,6 +112,8 @@ class TwoDataset(Dataset):
         self.length_dataset = len(self.images)
         self.len = len(self.images)
         self.stage = stage
+        # If using latent Abeta, skip resampling/cropping to target shape.
+        self.is_latent = (self.root_Abeta == config.latent_Abeta)
 
     def __len__(self):
         return self.length_dataset
@@ -113,12 +125,19 @@ class TwoDataset(Dataset):
         Abeta = nifti_to_numpy(path_Abeta)
         path_MRI = resolve_nifti(self.root_MRI, basename)
         MRI = nifti_to_numpy(path_MRI)
+        # Resample MRI to target shape and crop.
+        MRI = resample_to_shape(MRI, config.target_shape)
         MRI = center_crop(MRI, config.crop_size)
         MRI = z_score_norm(MRI)
         #print("min and max of MRI:", MRI.min(), MRI.max())
-        # Always center crop Abeta for consistency across splits
-        if Abeta.shape != config.crop_size:
+        # Abeta handling: if latent, keep latent shape; else resample+crop.
+        if not self.is_latent:
+            Abeta = resample_to_shape(Abeta, config.target_shape)
             Abeta = center_crop(Abeta, config.crop_size)
+        else:
+            # Ensure latent matches expected latent_shape; resample if needed.
+            if Abeta.shape != config.latent_shape:
+                Abeta = resample_to_shape(Abeta, config.latent_shape)
         Abeta = min_max_norm(Abeta)
         #print("min and max of Abeta:", Abeta.min(), Abeta.max())
         data = pd.read_csv("data_info/data_info.csv",encoding = "ISO-8859-1")

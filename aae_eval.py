@@ -7,7 +7,7 @@ from skimage.metrics import peak_signal_noise_ratio as psnr
 from skimage.metrics import structural_similarity as ssim
 
 import config
-from dataset import resolve_nifti, center_crop
+from dataset import resolve_nifti, center_crop, resample_to_shape
 from model import AAE
 from utils import seed_torch
 
@@ -39,6 +39,7 @@ def main():
             path = resolve_nifti(config.whole_Abeta, bid)
             img = nib.load(path)
             data = img.get_fdata().astype(np.float32)
+            data = resample_to_shape(data, config.target_shape)
             data = center_crop(data, config.crop_size)
             vmin, vmax = data.min(), data.max()
             data = np.zeros_like(data) if vmax - vmin < 1e-8 else (data - vmin) / (vmax - vmin)
@@ -49,12 +50,24 @@ def main():
             recon = torch.clamp(recon, 0, 1).cpu().numpy().squeeze().astype(np.float32)
 
             if recon.shape != data.shape:
-                print(f"{bid}: shape mismatch data {data.shape} recon {recon.shape}, skipping")
-                continue
+                # If shape mismatch, try center crop/pad recon to match data for metrics.
+                min_shape = tuple(min(a, b) for a, b in zip(recon.shape, data.shape))
+                def center_crop_np(vol, size):
+                    d, h, w = vol.shape
+                    cd, ch, cw = size
+                    sd = max((d - cd) // 2, 0)
+                    sh = max((h - ch) // 2, 0)
+                    sw = max((w - cw) // 2, 0)
+                    return vol[sd:sd+cd, sh:sh+ch, sw:sw+cw]
+                recon_eval = center_crop_np(recon, min_shape)
+                data_eval = center_crop_np(data, min_shape)
+            else:
+                recon_eval = recon
+                data_eval = data
 
-            rng = max(data.max() - data.min(), 1e-8)
-            ps = psnr(data, recon, data_range=rng)
-            ss = ssim(data, recon, data_range=rng)
+            rng = max(data_eval.max() - data_eval.min(), 1e-8)
+            ps = psnr(data_eval, recon_eval, data_range=rng)
+            ss = ssim(data_eval, recon_eval, data_range=rng)
             writer.writerow([bid, ps, ss])
             psnr_sum += ps
             ssim_sum += ss
@@ -62,8 +75,9 @@ def main():
             # Guardar reconstrucción
             nib.save(nib.Nifti1Image(recon, img.affine), os.path.join(out_dir, f"{bid}_recon.nii.gz"))
 
-    if ids:
-        print(f"Promedio PSNR {psnr_sum/len(ids):.3f}, SSIM {ssim_sum/len(ids):.4f}")
+    counted = len(ids) if ids else 0
+    if counted:
+        print(f"Promedio PSNR {psnr_sum/counted:.3f}, SSIM {ssim_sum/counted:.4f}")
     else:
         print("No hay IDs en el split de test.")
 

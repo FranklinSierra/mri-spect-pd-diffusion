@@ -23,9 +23,12 @@ CHECKPOINT_AAE = "result/"+exp+"AAE.pth.tar"
 CHECKPOINT_Unet = "result/"+exp+"Unet.pth.tar"
 
 # Spatial settings
+# Spatial settings
+# Target shape to resample SPECT (and MRI if needed) before cropping.
+target_shape = (182, 218, 182)
 # Crop size applied to MRI/SPECT before AAE and to MRI in LDM. Latent dims are crop_size/4.
-# Choose a cubic size divisible by 8 to avoid odd shapes in UNet down/upsampling.
-crop_size = (64, 64, 64)
+# Return to original repository defaults.
+crop_size = (160, 192, 160)
 latent_shape = (crop_size[0] // 4, crop_size[1] // 4, crop_size[2] // 4)
 
 train = "data_info/train.txt"

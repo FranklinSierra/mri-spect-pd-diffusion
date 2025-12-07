@@ -2,7 +2,7 @@ import torch, nibabel as nib, os
 from torch.utils.data import DataLoader, Dataset
 from model import AAE, UNet
 from utils import load_checkpoint
-from dataset import resolve_nifti, center_crop, z_score_norm
+from dataset import resolve_nifti, center_crop, z_score_norm, resample_to_shape
 from main import Diffusion
 import config
 import numpy as np
@@ -20,6 +20,7 @@ class MRIDataset(Dataset):
         bid = self.ids[idx]
         path_mri = resolve_nifti(self.root_mri, bid)
         mri = nib.load(path_mri).get_fdata().astype(np.float32)
+        mri = resample_to_shape(mri, config.target_shape)
         mri = center_crop(mri, config.crop_size)
         mri = z_score_norm(mri)
         return torch.tensor(mri, dtype=torch.float32), bid + ".nii"
@@ -36,7 +37,7 @@ unet = torch.nn.DataParallel(unet, device_ids=config.gpus, output_device=config.
 load_checkpoint(config.CHECKPOINT_Unet, unet, opt_unet, config.learning_rate)
 unet.eval()
 
-dataset = MRIDataset(ids_file=config.train, root_mri=config.whole_MRI)
+dataset = MRIDataset(ids_file=config.test, root_mri=config.whole_MRI)
 loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=config.numworker)
 diffusion = Diffusion()
 os.makedirs(os.path.join("result", str(config.exp), "samples"), exist_ok=True)

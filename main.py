@@ -136,6 +136,7 @@ def train_AAE():
         disc_loss_epoch=0
 
         for idx, (Abeta, stage) in enumerate(loop):
+            #print("Min and max of Abeta batch:", Abeta.min().item(), Abeta.max().item())
             Abeta = np.expand_dims(Abeta, axis=1)
             Abeta = torch.tensor(Abeta)
             Abeta = Abeta.to(config.device)
@@ -289,6 +290,7 @@ def train_LDM():
     model = AAE().to(config.device)
     opt_model = optim.Adam(model.parameters(),lr=config.learning_rate,betas=(0.5, 0.9))
     load_checkpoint(config.CHECKPOINT_AAE, model, opt_model, config.learning_rate)
+    print("AAE checkpoint loaded! from: ", config.CHECKPOINT_AAE)
 
     Unet = UNet(in_channel=2, out_channel=1, image_size=config.latent_shape[0]).to(config.device)
     opt_Unet= optim.AdamW(Unet.parameters(), lr=config.learning_rate)
@@ -346,6 +348,8 @@ def train_LDM():
         MSE_loss_epoch = 0
 
         for idx, (MRI, latent_Abeta, stage, label) in enumerate(loop):
+            #print("min and max of mri batch:", MRI.min().item(), MRI.max().item())
+            #print("min and max of latent_Abeta batch:", latent_Abeta.min().item(), latent_Abeta.max().item())
             label = label.to(config.device)
             MRI = np.expand_dims(MRI, axis=1)
             MRI = torch.tensor(MRI)
@@ -388,8 +392,11 @@ def train_LDM():
             MRI = MRI.to(config.device)
 
             sampled_latent = diffusion.sample(ema_Unet, MRI)
+            #print("Min and max of MRI sampled_latent:", sampled_latent.min().item(), sampled_latent.max().item())
             syn_Abeta = model.decoder(sampled_latent)
+            #print("Min and max of syn_Abeta before clamp:", syn_Abeta.min().item(), syn_Abeta.max().item())
             syn_Abeta = torch.clamp(syn_Abeta,0,1)
+            #print("Min and max of syn_Abeta after clamp:", syn_Abeta.min().item(), syn_Abeta.max().item())
             syn_Abeta = syn_Abeta.detach().cpu().numpy()
             syn_Abeta = np.squeeze(syn_Abeta)
             syn_Abeta = syn_Abeta.astype(np.float32)
