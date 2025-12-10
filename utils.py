@@ -4,6 +4,8 @@ import torch
 import config
 import random
 import os
+import glob
+import nibabel as nib
 
 def weights_init(m):
     classname = m.__class__.__name__
@@ -49,3 +51,22 @@ def seed_torch(seed=0):
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+
+
+def compute_latent_stats(latent_dir):
+    """Compute mean/std over all latent SPECT volumes in `latent_dir`."""
+    files = glob.glob(os.path.join(latent_dir, "*.nii")) + glob.glob(os.path.join(latent_dir, "*.nii.gz"))
+    if not files:
+        raise FileNotFoundError(f"No latent files found in {latent_dir}")
+    total = 0.0
+    total_sq = 0.0
+    count = 0
+    for f in files:
+        arr = nib.load(f).get_fdata().astype(np.float64)
+        total += arr.sum()
+        total_sq += np.square(arr).sum()
+        count += arr.size
+    mean = total / count
+    var = total_sq / count - mean * mean
+    std = float(np.sqrt(max(var, 1e-12)))
+    return float(mean), std

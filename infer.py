@@ -1,7 +1,7 @@
 import torch, nibabel as nib, os
 from torch.utils.data import DataLoader, Dataset
 from model import AAE, UNet
-from utils import load_checkpoint
+from utils import load_checkpoint, compute_latent_stats
 from dataset import resolve_nifti, center_crop, z_score_norm, resample_to_shape
 from main import Diffusion
 import config
@@ -42,10 +42,17 @@ loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=config.num
 diffusion = Diffusion()
 os.makedirs(os.path.join("result", str(config.exp), "samples"), exist_ok=True)
 
+# Latent stats for de-normalization
+latent_mean, latent_std = compute_latent_stats(config.latent_Abeta)
+latent_mean_t = torch.tensor(latent_mean, device=device, dtype=torch.float32).view(1,1,1,1,1)
+latent_std_t = torch.tensor(latent_std, device=device, dtype=torch.float32).view(1,1,1,1,1)
+print(f"Latent stats (infer) -> mean: {latent_mean:.4f}, std: {latent_std:.4f}")
+
 with torch.no_grad():
     for MRI, names in loader:
         MRI = MRI.unsqueeze(1).to(device)
         sampled_latent = diffusion.sample(unet, MRI)
+        sampled_latent = sampled_latent * latent_std_t + latent_mean_t
         synth = aae.decoder(sampled_latent).clamp(0, 1).cpu().squeeze().numpy()
         affine = nib.load(os.path.join(config.whole_MRI, names[0])).affine
         nib.save(nib.Nifti1Image(synth, affine),

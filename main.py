@@ -14,6 +14,7 @@ import copy
 import config
 import csv
 import os
+import nibabel as nib
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -300,6 +301,11 @@ def train_LDM():
 
     L2 = nn.MSELoss()
     diffusion = Diffusion()
+    # Latent stats for normalization
+    latent_mean, latent_std = compute_latent_stats(config.latent_Abeta)
+    latent_mean_t = torch.tensor(latent_mean, device=config.device, dtype=torch.float32).view(1,1,1,1,1)
+    latent_std_t = torch.tensor(latent_std, device=config.device, dtype=torch.float32).view(1,1,1,1,1)
+    print(f"Latent stats -> mean: {latent_mean:.4f}, std: {latent_std:.4f}")
     start_epoch = 0
     average = 0
     best_ssim = -1e9
@@ -352,11 +358,10 @@ def train_LDM():
             #print("min and max of latent_Abeta batch:", latent_Abeta.min().item(), latent_Abeta.max().item())
             label = label.to(config.device)
             MRI = np.expand_dims(MRI, axis=1)
-            MRI = torch.tensor(MRI)
-            MRI = MRI.to(config.device)
+            MRI = torch.tensor(MRI, device=config.device)
             latent_Abeta = np.expand_dims(latent_Abeta, axis=1)
-            latent_Abeta = torch.tensor(latent_Abeta)
-            latent_Abeta = latent_Abeta.to(config.device)
+            latent_Abeta = torch.tensor(latent_Abeta, device=config.device)
+            latent_Abeta = (latent_Abeta - latent_mean_t) / latent_std_t
 
             t = diffusion.sample_timesteps(latent_Abeta.shape[0]).to(config.device)
             x_t, noise = diffusion.noise_images(latent_Abeta, t)
@@ -388,15 +393,12 @@ def train_LDM():
 
         for idx, (MRI, Abeta, stage, label) in enumerate(loop):
             MRI = np.expand_dims(MRI, axis=1)
-            MRI = torch.tensor(MRI)
-            MRI = MRI.to(config.device)
+            MRI = torch.tensor(MRI, device=config.device)
 
             sampled_latent = diffusion.sample(ema_Unet, MRI)
-            #print("Min and max of MRI sampled_latent:", sampled_latent.min().item(), sampled_latent.max().item())
+            sampled_latent = sampled_latent * latent_std_t + latent_mean_t
             syn_Abeta = model.decoder(sampled_latent)
-            #print("Min and max of syn_Abeta before clamp:", syn_Abeta.min().item(), syn_Abeta.max().item())
             syn_Abeta = torch.clamp(syn_Abeta,0,1)
-            #print("Min and max of syn_Abeta after clamp:", syn_Abeta.min().item(), syn_Abeta.max().item())
             syn_Abeta = syn_Abeta.detach().cpu().numpy()
             syn_Abeta = np.squeeze(syn_Abeta)
             syn_Abeta = syn_Abeta.astype(np.float32)
@@ -453,10 +455,10 @@ def train_LDM():
 
             for idx, (MRI, Abeta, stage, label) in enumerate(loop):
                 MRI = np.expand_dims(MRI, axis=1)
-                MRI = torch.tensor(MRI)
-                MRI = MRI.to(config.device)
+                MRI = torch.tensor(MRI, device=config.device)
 
                 sampled_latent = diffusion.sample(ema_Unet, MRI)
+                sampled_latent = sampled_latent * latent_std_t + latent_mean_t
                 syn_Abeta = model.decoder(sampled_latent)
                 syn_Abeta = torch.clamp(syn_Abeta,0,1)
                 syn_Abeta = syn_Abeta.detach().cpu().numpy()
