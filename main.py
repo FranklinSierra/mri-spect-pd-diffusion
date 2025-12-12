@@ -15,6 +15,7 @@ import config
 import csv
 import os
 import nibabel as nib
+import math
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -30,7 +31,14 @@ class Diffusion:
         self.alpha_hat = torch.cumprod(self.alpha, dim=0)
 
     def prepare_noise_schedule(self):
-        return torch.linspace(self.beta_start, self.beta_end, self.noise_steps)
+        # Cosine schedule from Nichol & Dhariwal (2021)
+        s = 0.008
+        x = torch.linspace(0, self.noise_steps, steps=self.noise_steps + 1, dtype=torch.float32)
+        alphas_cumprod = torch.cos(((x / self.noise_steps) + s) / (1 + s) * math.pi * 0.5) ** 2
+        alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
+        betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
+        betas = torch.clamp(betas, min=1e-5, max=0.999)
+        return betas
 
     def noise_images(self, x, t):
         sqrt_alpha_hat = torch.sqrt(self.alpha_hat[t])[:, None, None, None, None]
@@ -291,6 +299,10 @@ def train_LDM():
     model = AAE().to(config.device)
     opt_model = optim.Adam(model.parameters(),lr=config.learning_rate,betas=(0.5, 0.9))
     load_checkpoint(config.CHECKPOINT_AAE, model, opt_model, config.learning_rate)
+    model.eval()
+    for p in model.parameters():
+        p.requires_grad = False
+
     print("AAE checkpoint loaded! from: ", config.CHECKPOINT_AAE)
 
     Unet = UNet(in_channel=2, out_channel=1, image_size=config.latent_shape[0]).to(config.device)
@@ -330,6 +342,23 @@ def train_LDM():
     if start_epoch or average:
         print(f"=> Resuming Unet from epoch {start_epoch}, best metric {average}")
 
+    def ssim_3d_torch(x, y, data_range=1.0, window_size=3):
+        # Simple differentiable SSIM for 3D volumes using uniform window.
+        # x,y: (B,1,D,H,W) in [0,1].
+        pad = window_size // 2
+        mu_x = F.avg_pool3d(x, kernel_size=window_size, stride=1, padding=pad)
+        mu_y = F.avg_pool3d(y, kernel_size=window_size, stride=1, padding=pad)
+        mu_x2 = mu_x.pow(2)
+        mu_y2 = mu_y.pow(2)
+        mu_xy = mu_x * mu_y
+        sigma_x2 = F.avg_pool3d(x * x, kernel_size=window_size, stride=1, padding=pad) - mu_x2
+        sigma_y2 = F.avg_pool3d(y * y, kernel_size=window_size, stride=1, padding=pad) - mu_y2
+        sigma_xy = F.avg_pool3d(x * y, kernel_size=window_size, stride=1, padding=pad) - mu_xy
+        c1 = (0.01 * data_range) ** 2
+        c2 = (0.03 * data_range) ** 2
+        ssim_map = ((2 * mu_xy + c1) * (2 * sigma_xy + c2)) / ((mu_x2 + mu_y2 + c1) * (sigma_x2 + sigma_y2 + c2) + 1e-8)
+        return ssim_map.mean(dim=(1, 2, 3, 4))
+
     def safe_ssim(gt, pred, data_range):
         # Adapt window size to the smallest spatial dim; if too small, return 0.
         min_side = min(gt.shape)
@@ -353,7 +382,7 @@ def train_LDM():
 
         MSE_loss_epoch = 0
 
-        for idx, (MRI, latent_Abeta, stage, label) in enumerate(loop):
+        for idx, (MRI, latent_Abeta, real_Abeta, stage, label) in enumerate(loop):
             #print("min and max of mri batch:", MRI.min().item(), MRI.max().item())
             #print("min and max of latent_Abeta batch:", latent_Abeta.min().item(), latent_Abeta.max().item())
             label = label.to(config.device)
@@ -362,11 +391,24 @@ def train_LDM():
             latent_Abeta = np.expand_dims(latent_Abeta, axis=1)
             latent_Abeta = torch.tensor(latent_Abeta, device=config.device)
             latent_Abeta = (latent_Abeta - latent_mean_t) / latent_std_t
+            real_Abeta = np.expand_dims(real_Abeta, axis=1)
+            real_Abeta = torch.tensor(real_Abeta, device=config.device)
 
             t = diffusion.sample_timesteps(latent_Abeta.shape[0]).to(config.device)
             x_t, noise = diffusion.noise_images(latent_Abeta, t)
             predicted_noise = Unet(x_t, MRI, t, label)
-            loss = L2(predicted_noise, noise)
+            loss_noise = L2(predicted_noise, noise)
+            # Estimate x0_hat and add latent reconstruction loss
+            alpha_hat_t = diffusion.alpha_hat[t].to(config.device).view(-1, 1, 1, 1, 1)
+            x0_hat = (x_t - torch.sqrt(1 - alpha_hat_t) * predicted_noise) / torch.sqrt(alpha_hat_t)
+            loss_lat = L2(x0_hat, latent_Abeta)
+            # Decode de-normalized latent for image-level loss.
+            x0_hat_denorm = x0_hat * latent_std_t + latent_mean_t
+            x_fake = model.decoder(x0_hat_denorm)
+            x_fake = torch.clamp(x_fake, 0, 1)
+            x_real = real_Abeta
+            loss_img = F.l1_loss(x_fake, x_real) + (1 - ssim_3d_torch(x_fake, x_real, data_range=1.0).mean())
+            loss = loss_noise + config.latent_loss_weight * loss_lat + config.image_loss_weight * loss_img
 
             opt_Unet.zero_grad()
             loss.backward()
@@ -391,7 +433,7 @@ def train_LDM():
         if epoch == 0:
             writer.writerow(['Epoch','PSNR','SSIM'])
 
-        for idx, (MRI, Abeta, stage, label) in enumerate(loop):
+        for idx, (MRI, Abeta, Abeta_real, stage, label) in enumerate(loop):
             MRI = np.expand_dims(MRI, axis=1)
             MRI = torch.tensor(MRI, device=config.device)
 
@@ -404,13 +446,13 @@ def train_LDM():
             syn_Abeta = syn_Abeta.astype(np.float32)
 
             # DataLoader convierte los numpy en torch; pasa a numpy antes de métricas.
-            Abeta = Abeta.detach().cpu().numpy()
-            Abeta = np.squeeze(Abeta)
-            Abeta = Abeta.astype(np.float32)
-            data_range = max(Abeta.max() - Abeta.min(), 1e-8)
+            Abeta_real = Abeta_real.detach().cpu().numpy()
+            Abeta_real = np.squeeze(Abeta_real)
+            Abeta_real = Abeta_real.astype(np.float32)
+            data_range = max(Abeta_real.max() - Abeta_real.min(), 1e-8)
 
-            psnr_0 += round(psnr(Abeta,syn_Abeta, data_range=data_range),3)
-            ssim_0 += round(safe_ssim(Abeta, syn_Abeta, data_range=data_range), 3)
+            psnr_0 += round(psnr(Abeta_real,syn_Abeta, data_range=data_range),3)
+            ssim_0 += round(safe_ssim(Abeta_real, syn_Abeta, data_range=data_range), 3)
         
         psnr_avg = psnr_0/length
         ssim_avg = ssim_0/length
@@ -453,7 +495,7 @@ def train_LDM():
             if epoch == 0:
                 writer.writerow(['Epoch','PSNR','SSIM'])
 
-            for idx, (MRI, Abeta, stage, label) in enumerate(loop):
+            for idx, (MRI, Abeta, Abeta_real, stage, label) in enumerate(loop):
                 MRI = np.expand_dims(MRI, axis=1)
                 MRI = torch.tensor(MRI, device=config.device)
 
@@ -465,13 +507,13 @@ def train_LDM():
                 syn_Abeta = np.squeeze(syn_Abeta)
                 syn_Abeta = syn_Abeta.astype(np.float32)
 
-                Abeta = Abeta.detach().cpu().numpy()
-                Abeta = np.squeeze(Abeta)
-                Abeta = Abeta.astype(np.float32)
-                data_range = max(Abeta.max() - Abeta.min(), 1e-8)
+                Abeta_real = Abeta_real.detach().cpu().numpy()
+                Abeta_real = np.squeeze(Abeta_real)
+                Abeta_real = Abeta_real.astype(np.float32)
+                data_range = max(Abeta_real.max() - Abeta_real.min(), 1e-8)
 
-                psnr_0 += round(psnr(Abeta,syn_Abeta, data_range=data_range),3)
-                ssim_0 += round(safe_ssim(Abeta, syn_Abeta, data_range=data_range), 3)
+                psnr_0 += round(psnr(Abeta_real,syn_Abeta, data_range=data_range),3)
+                ssim_0 += round(safe_ssim(Abeta_real, syn_Abeta, data_range=data_range), 3)
 
             writer.writerow([epoch+1, psnr_0/length, ssim_0/length])
             csvfile.close()

@@ -121,6 +121,12 @@ class TwoDataset(Dataset):
     def __getitem__(self, index):
         basename = self.images[index % self.len]
         name = basename + ".nii"
+        # Real SPECT (always load from whole_Abeta for image loss / metrics)
+        path_Abeta_real = resolve_nifti(config.whole_Abeta, basename)
+        Abeta_real = nifti_to_numpy(path_Abeta_real)
+        Abeta_real = resample_to_shape(Abeta_real, config.target_shape)
+        Abeta_real = center_crop(Abeta_real, config.crop_size)
+        Abeta_real = min_max_norm(Abeta_real)
         path_Abeta = resolve_nifti(self.root_Abeta, basename)
         Abeta = nifti_to_numpy(path_Abeta)
         path_MRI = resolve_nifti(self.root_MRI, basename)
@@ -128,7 +134,7 @@ class TwoDataset(Dataset):
         # Resample MRI to target shape and crop.
         MRI = resample_to_shape(MRI, config.target_shape)
         MRI = center_crop(MRI, config.crop_size)
-        MRI = z_score_norm(MRI)
+        MRI = min_max_norm(MRI)
         #print("min and max of MRI:", MRI.min(), MRI.max())
         # Abeta handling: if latent, keep latent shape; else resample+crop.
         if not self.is_latent:
@@ -147,4 +153,4 @@ class TwoDataset(Dataset):
             label = np.array([0], dtype=np.float32)
 
         #print("ID", basename, "label shape", label.shape, "label", label)
-        return MRI, Abeta, name, label
+        return MRI, Abeta, Abeta_real, name, label

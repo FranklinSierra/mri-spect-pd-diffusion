@@ -4,3 +4,5 @@ Latent stats -> mean: 1.2125, std: 3.8916
 => Saving checkpoint
 => Saving checkpoint
 => Saving checkpoint
+=> Saving checkpoint
+=> Saving checkpoint

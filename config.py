@@ -10,6 +10,8 @@ epochs = 1000
 time_dim = 128
 num_classes = 2
 Lambda = 100
+latent_loss_weight = 0.1
+image_loss_weight = 0.2
 seed = 42
 
 exp = "exp_1/"
