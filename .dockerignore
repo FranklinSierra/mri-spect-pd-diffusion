@@ -1,0 +1,30 @@
+# Datos pesados
+data/
+datasets/
+images/
+outputs/
+results/
+checkpoints/
+logs/
+
+# Neuroimagen
+*.nii
+*.nii.gz
+*.mha
+*.nrrd
+
+# Imágenes intermedias
+*.png
+*.jpg
+*.jpeg
+
+# Cache y basura
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Git
+.git/
+
+# Docker
+*.tar
