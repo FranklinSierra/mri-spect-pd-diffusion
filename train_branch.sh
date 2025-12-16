@@ -18,12 +18,15 @@ if [ -z "$BRANCH" ] || [ -z "$GPU_ID" ]; then
   exit 1
 fi
 
+# Ubica la raíz del repo desde donde vive este script.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR" || exit 1
+
 echo "--------------------------------------------------------"
 echo " Entrenando rama: $BRANCH en GPU: $GPU_ID"
 echo "--------------------------------------------------------"
 
 git checkout "$BRANCH" || exit 1
-cd /workspace/projects/T1-SPECT-translation/IL-CLDM || exit 1
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export CUDA_VISIBLE_DEVICES=$GPU_ID
