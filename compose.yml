@@ -1,0 +1,19 @@
+services:
+  mri-spect:
+    container_name: mri-spect
+    build: ./
+    shm_size: '32gb'
+    volumes:
+      - ./:/workspace
+      - $HOME/.gitignore:/root/.gitignore
+      - $HOME/.ssh:/root/.ssh
+      - /home/Data/franklin/Doctorado/parkinson/projects/IL-CLDM_old/data:/workspace/data
+    working_dir: /workspace
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command: bash -c "while true; do echo 'Hit CTRL+C'; sleep 43200; done"
