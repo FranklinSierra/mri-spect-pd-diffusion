@@ -47,6 +47,12 @@ def parse_args():
         default=2,
         help="Tamaño de batch para el DataLoader (usa el mismo valor de entrenamiento por defecto).",
     )
+    parser.add_argument(
+        "--noise_steps",
+        type=int,
+        default=1000,
+        help="Número de pasos de la cadena de difusión (por defecto 1000).",
+    )
     return parser.parse_args()
 
 
@@ -146,8 +152,9 @@ def save_embeddings(
 
 def main():
     args = parse_args()
+    print("Configuración de extracción de latentes:", args)
     seed_torch(config.seed)
-    diffusion = Diffusion()
+    diffusion = Diffusion(noise_steps=args.noise_steps)
     unet = load_unet(args.checkpoint)
     latent_mean, latent_std = compute_latent_stats(config.latent_Abeta)
     latent_mean_t = torch.tensor(latent_mean, device=config.device).view(
@@ -164,8 +171,11 @@ def main():
         for MRI, _, _, names, label in loader:
             MRI = np.expand_dims(MRI, axis=1)
             MRI = torch.tensor(MRI, device=config.device, dtype=torch.float32)
+            # mantener las etiquetas originales para el CSV, pero NO usarlas
+            # como condición al generar latentes: pasar un tensor de ceros
             label_tensor = torch.tensor(label, device=config.device).long()
-            latents = diffuse_latents(unet, diffusion, MRI, label_tensor)
+            zero_labels = torch.zeros_like(label_tensor)
+            latents = diffuse_latents(unet, diffusion, MRI, zero_labels)
             latents = latents * latent_std_t + latent_mean_t
             latents_np = latents.cpu().numpy().squeeze(1)
             metadata.extend(
