@@ -44,6 +44,17 @@ def center_crop(data, size):
     sw = max((w - cw) // 2, 0)
     return data[sd:sd+cd, sh:sh+ch, sw:sw+cw]
 
+###=====provisional traido del repo original
+def crop(data1):
+    return data1[10:170,18:210,10:170]
+
+def random_translation(data1):
+    i=np.random.randint(-2,3)
+    j=np.random.randint(-2,3)
+    z=np.random.randint(-2,3)
+    return data1[10+i:170+i,18+j:210+j,10+z:170+z]
+###=====hasta aca
+
 def random_crop(data, size):
     """Random crop within bounds to size (D,H,W)."""
     d, h, w = data.shape
@@ -98,6 +109,12 @@ class OneDataset(Dataset):
         Abeta = resample_to_shape(Abeta, config.target_shape)
         # Use center crop for all splits for stability.
         Abeta = center_crop(Abeta, config.crop_size)
+        #======provisional traido del repo original======
+        #if self.stage == "train":
+        #    Abeta = random_translation(Abeta)
+        #else:
+        #    Abeta = crop(Abeta)
+        #======hasta aca======
         Abeta = min_max_norm(Abeta)
         #print("min and max of Abeta:", Abeta.min(), Abeta.max())
         return Abeta, basename + ".nii"
@@ -126,6 +143,12 @@ class TwoDataset(Dataset):
         Abeta_real = nifti_to_numpy(path_Abeta_real)
         Abeta_real = resample_to_shape(Abeta_real, config.target_shape)
         Abeta_real = center_crop(Abeta_real, config.crop_size)
+        #======provisional traido del repo original======
+        #if self.stage == "train":
+        #    Abeta_real = random_translation(Abeta_real)
+        #else:
+        #    Abeta_real = crop(Abeta_real)
+        #======hasta aca======
         Abeta_real = min_max_norm(Abeta_real)
         path_Abeta = resolve_nifti(self.root_Abeta, basename)
         Abeta = nifti_to_numpy(path_Abeta)
@@ -134,12 +157,24 @@ class TwoDataset(Dataset):
         # Resample MRI to target shape and crop.
         MRI = resample_to_shape(MRI, config.target_shape)
         MRI = center_crop(MRI, config.crop_size)
+        #======provisional traido del repo original======
+        #if self.stage == "train":
+        #    MRI = random_translation(MRI)
+        #else:
+        #    MRI = crop(MRI)
+        #======hasta aca======
         MRI = min_max_norm(MRI)
         #print("min and max of MRI:", MRI.min(), MRI.max())
         # Abeta handling: if latent, keep latent shape; else resample+crop.
         if not self.is_latent:
             Abeta = resample_to_shape(Abeta, config.target_shape)
             Abeta = center_crop(Abeta, config.crop_size)
+            #======provisional traido del repo original======
+            #if self.stage == "train":
+            #    Abeta = random_translation(Abeta)
+            #else:
+            #    Abeta = crop(Abeta)
+            #======hasta aca======
         else:
             # Ensure latent matches expected latent_shape; resample if needed.
             if Abeta.shape != config.latent_shape:

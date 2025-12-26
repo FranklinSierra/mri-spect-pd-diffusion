@@ -324,13 +324,18 @@ class UNet(nn.Module):
 
         self.ups = nn.ModuleList(ups)
         self.final_conv = Block(pre_channel, default(out_channel, in_channel), groups=norm_groups)
+        # Mirror the conditioning encoder used when training the released checkpoint.
         self.cond = nn.Sequential(
-            nn.Conv3d(1, 16, 4, 2, 1),
+            nn.Conv3d(1, 32, 4, 2, 1),
+            ResidualBlock(32, 32),
+            nn.Conv3d(32, 64, 4, 2, 1),
+            ResidualBlock(64, 64),
+            nn.Conv3d(64, 32, 3, 1, 1),
+            ResidualBlock(32, 32),
+            nn.Conv3d(32, 16, 3, 1, 1),
             ResidualBlock(16, 16),
-            GroupNorm(16),
-            Swish(),
-            nn.Conv3d(16, 1, 4, 2, 1),
-            )
+            nn.Conv3d(16, 1, 1, 1, 0),
+        )
         self.label_emb = nn.Embedding(config.num_classes, time_dim)
     
     def forward(self, x, y, time, label=None):
